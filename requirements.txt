@@ -1,0 +1,4 @@
+# mcp 2.x requis: FastMCP y a ete renomme MCPServer (import de sb_mcp_http.py).
+# Avec mcp<2 l'import echoue.
+mcp>=2.2,<3
+httpx>=0.28,<1
