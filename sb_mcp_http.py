@@ -1,9 +1,15 @@
-"""Serveur MCP stdio local exposant un espace SilverBullet distant.
+"""Serveur MCP exposant un espace SilverBullet distant, en streamable-http.
+
+Le serveur n'a pas d'authentification propre: il ecoute sur la loopback et
+doit rester derriere un reverse proxy qui gere le TLS et l'auth (voir
+Caddyfile.example). Ne pas mettre HOST a 0.0.0.0 sans un tel proxy.
 
 Variables d'environnement:
   SB_BASE_URL  URL de l'espace, prefixe inclus (ex: https://notes.example.fr/work)
   SB_TOKEN     token d'API du compte (admin UI > Users > API tokens)
   SB_WRITE_PREFIX  prefixe sous lequel l'ecriture est autorisee (defaut: "Inbox/")
+  HOST         interface d'ecoute (defaut: 127.0.0.1)
+  PORT         port d'ecoute (defaut: 8000)
 """
 
 import os
@@ -132,6 +138,6 @@ async def append_to_note(name: str, text: str) -> str:
 if __name__ == "__main__":
     mcp.run(
         transport="streamable-http",
-        host="0.0.0.0",
+        host=os.environ.get("HOST", "127.0.0.1"),
         port=int(os.environ.get("PORT", "8000")),
     )
