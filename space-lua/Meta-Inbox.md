@@ -77,9 +77,14 @@ end
 command.define {
   name = "Inbox: Classer vers destination",
   requireMode = "rw",
-  -- `src` vient du bouton de la liste ci-dessus; sans argument on classe la page ouverte.
-  run = function(src)
+  -- `runCommandByName` passe la liste d'arguments telle quelle, sans l'etaler:
+  -- le bouton de la liste envoie {"Inbox/..."}, la palette n'envoie rien.
+  run = function(arg)
     local current = editor.getCurrentPage()
+    local src = arg
+    if type(src) == "table" then
+      src = src[1]
+    end
     src = src or current
     if not string.startsWith(src, "Inbox/") then
       editor.flashNotification("Pas une page Inbox/", "error")
