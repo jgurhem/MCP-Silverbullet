@@ -2,9 +2,11 @@
 description: Classe une note d'Inbox vers la destination indiquee en frontmatter.
 ---
 
-Les notes ecrites par le serveur MCP arrivent dans `Inbox/`, seul prefixe ou il a le droit d'ecrire. Une note qui porte une cle `destination:` en frontmatter et un `${inbox.button()}` dans son corps affiche un bouton **Classer** : le corps est ajoute a la fin de la page destination, puis la note d'`Inbox/` est supprimee.
+Le serveur MCP ne peut ecrire que sous `Inbox/`. Une note destinee ailleurs y est deposee avec une cle `destination:` en frontmatter et un `${inbox.button()}` dans son corps, ce qui affiche un bouton **Classer** : le corps est ajoute a la fin de la page destination, puis la note d'`Inbox/` est supprimee.
 
-Format attendu :
+C'est l'outil `create_note` du serveur qui pose ce frontmatter et ce bouton, a partir de son parametre `destination`. Rien a ecrire a la main.
+
+Format produit :
 
 ~~~
 ---
@@ -18,6 +20,9 @@ ${inbox.button()}
 La ligne du bouton est retiree du texte au moment du classement : elle ne part pas dans la destination.
 
 La commande `Inbox: Classer vers destination` fait le meme travail depuis la palette (Ctrl-/), utile si le bouton n'a pas ete mis dans la note.
+
+# En attente
+${inbox.pending()}
 
 # Implementation
 ```space-lua
@@ -35,16 +40,65 @@ local function stripButton(text)
   return (string.gsub(text, "%${inbox%.button%(%)}", ""))
 end
 
+-- Les notes en attente, lues depuis l'espace et non depuis l'index: une note qui
+-- vient d'arriver par le serveur MCP peut ne pas encore y etre indexee, et c'est
+-- precisement celle-la qu'il faut voir.
+function inbox.pending()
+  local items = {}
+  for _, page in ipairs(space.listPages()) do
+    if string.startsWith(page.name, "Inbox/") then
+      local ok, text = pcall(space.readPage, page.name)
+      local dest = ok and index.extractFrontmatter(text).frontmatter.destination
+      if dest then
+        local name = page.name
+        table.insert(items, dom.li {
+          dom.a {
+            onclick = function() editor.navigate(name) end,
+            style = "cursor: pointer",
+            name
+          },
+          " → " .. dest .. " ",
+          dom.button {
+            onclick = function()
+              editor.invokeCommand("Inbox: Classer vers destination", { name })
+            end,
+            "Classer"
+          }
+        })
+      end
+    end
+  end
+  if #items == 0 then
+    return widget.html(dom.p "Rien en attente.")
+  end
+  return widget.html(dom.ul(items))
+end
+
 command.define {
   name = "Inbox: Classer vers destination",
   requireMode = "rw",
-  run = function()
-    local src = editor.getCurrentPage()
+  -- `src` vient du bouton de la liste ci-dessus; sans argument on classe la page ouverte.
+  run = function(src)
+    local current = editor.getCurrentPage()
+    src = src or current
     if not string.startsWith(src, "Inbox/") then
       editor.flashNotification("Pas une page Inbox/", "error")
       return
     end
-    local fm = index.extractFrontmatter(editor.getText(), {
+    -- La page ouverte peut avoir des modifications pas encore ecrites: pour elle
+    -- le texte de l'editeur fait foi, pour les autres celui de l'espace.
+    local text
+    if src == current then
+      text = editor.getText()
+    else
+      local ok, read = pcall(space.readPage, src)
+      if not ok then
+        editor.flashNotification("Lecture impossible: " .. src, "error")
+        return
+      end
+      text = read
+    end
+    local fm = index.extractFrontmatter(text, {
       removeFrontMatterSection = true
     })
     local dest = fm.frontmatter.destination
@@ -86,10 +140,15 @@ command.define {
       return
     end
 
-    -- Supprimer puis quitter la page, comme le fait `Page: Delete`.
     space.deletePage(src)
-    editor.navigate(dest)
     editor.flashNotification("Classe dans " .. dest)
+    -- Depuis la liste on y reste, pour enchainer les notes suivantes. Depuis la
+    -- note elle-meme il faut partir: elle vient d'etre supprimee.
+    if src == current then
+      editor.navigate(dest)
+    else
+      editor.reloadPage()
+    end
   end
 }
 ```

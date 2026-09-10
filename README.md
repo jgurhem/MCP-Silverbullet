@@ -53,10 +53,51 @@ changing `HOST` — see [Deployment](#deployment).
 | `search_pages`   | Case-insensitive search over page names and bodies                  |
 | `create_note`    | Create a page, failing if it already exists                         |
 | `append_to_note` | Append text to an existing page without overwriting the rest        |
+| `replace_note`   | Replace a page's whole content, to correct a note already written   |
+| `delete_note`    | Delete a page                                                       |
 
-Both write tools reject any page outside `SB_WRITE_PREFIX`, and both use HTTP
-conditional requests — `If-None-Match` on create, `If-Match` on append — so a
-page that changed underneath the server is not clobbered.
+Every write tool rejects any page outside `SB_WRITE_PREFIX`, and they use HTTP
+conditional requests — `If-None-Match` on create, `If-Match` on append and
+replace — so a page that changed underneath the server is not clobbered.
+
+## Filing notes outside the write prefix
+
+Writes are confined to `SB_WRITE_PREFIX`, but most notes belong somewhere else —
+a journal page, a project page. `create_note` and `replace_note` take a
+`destination` for that: the note is still written under the prefix, with a
+frontmatter key and a **Classer** button that files it on one click.
+
+```
+create_note(name="Inbox/point-natixis", content="14h30 point Natixis, RAS",
+            destination="Journal/2026-09-10")
+```
+
+produces
+
+```markdown
+---
+destination: Journal/2026-09-10
+---
+${inbox.button()}
+
+14h30 point Natixis, RAS
+```
+
+Clicking **Classer** appends the body to `Journal/2026-09-10` and deletes the
+note; the frontmatter and the button line are stripped on the way. The
+destination is re-read after the write, and the source is deleted only once the
+body is confirmed there — a write that did not land never costs the note.
+
+The client never writes that frontmatter itself: it passes `destination`, the
+server renders it, and the server's MCP instructions say so. Omit `destination`
+and the content is written verbatim, for a note that genuinely lives under the
+prefix.
+
+The button and the command are not part of this server — they live in the
+SilverBullet space, as the space-lua page [`space-lua/Meta-Inbox.md`](space-lua/Meta-Inbox.md).
+Copy it to `Meta/Inbox` in your space. That page also lists every note still
+waiting, with a Classer button per row, so filing several notes does not mean
+opening each one.
 
 ## Deployment
 
@@ -84,6 +125,10 @@ token, or move authentication into the server itself: the SDK takes a
 
 `search_pages` fetches every page in the space on each call, so search cost
 grows linearly with space size.
+
+`space-lua/Meta-Inbox.md` is a reference copy of a page that lives in the
+SilverBullet space; the space holds the version that actually runs. Since
+`Meta/` is outside the write prefix, the two are resynchronised by hand.
 
 ## License
 

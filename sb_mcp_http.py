@@ -31,7 +31,17 @@ HIDE_PREFIXES = tuple(
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 TIMEOUT = httpx.Timeout(30.0)
 
-mcp = MCPServer("silverbullet", instructions="Acces aux notes SilverBullet.")
+INSTRUCTIONS = f"""Acces aux notes SilverBullet.
+
+La lecture porte sur tout l'espace, l'ecriture uniquement sous {WRITE_PREFIX}.
+
+Une note destinee a une autre page se cree quand meme avec create_note, en
+renseignant `destination` (ex: "Journal/2026-09-10"): elle est deposee sous
+{WRITE_PREFIX} avec un bouton *Classer* que l'utilisateur clique dans
+SilverBullet pour ajouter le corps a la destination et supprimer la note.
+Ne jamais ecrire ce frontmatter a la main, le serveur s'en charge."""
+
+mcp = MCPServer("silverbullet", instructions=INSTRUCTIONS)
 
 
 def _page_path(name: str) -> str:
@@ -101,6 +111,17 @@ async def search_pages(query: str, max_hits: int = 20) -> str:
     return "\n".join(sorted(hits)[:max_hits])
 
 
+def _render(content: str, destination: str) -> str:
+    """Mise en forme d'une note a classer: frontmatter et bouton que la page
+    space-lua `Meta/Inbox` sait traiter. Sans destination, le corps passe tel quel."""
+    if not destination.strip():
+        return content
+    return (
+        f"---\ndestination: {destination.strip()}\n---\n"
+        f"${{inbox.button()}}\n\n{content.strip()}\n"
+    )
+
+
 def _writable(name: str) -> str:
     path = _page_path(name)
     if not path.startswith(WRITE_PREFIX):
@@ -111,9 +132,14 @@ def _writable(name: str) -> str:
 
 
 @mcp.tool()
-async def create_note(name: str, content: str) -> str:
+async def create_note(name: str, content: str, destination: str = "") -> str:
     """Cree une nouvelle note. Echoue si elle existe deja. Le nom doit commencer
-    par le prefixe d'ecriture autorise."""
+    par le prefixe d'ecriture autorise.
+
+    `destination` est la page ou la note doit finir par atterrir, si ce n'est pas
+    celle qu'on ecrit. Le serveur pose alors le frontmatter et le bouton
+    *Classer*: l'utilisateur clique, le corps part a la destination et la note
+    est supprimee. `content` reste le corps seul, sans frontmatter."""
     try:
         path = _writable(name)
     except ValueError as e:
@@ -122,7 +148,7 @@ async def create_note(name: str, content: str) -> str:
         r = await c.put(
             f"{BASE}/.fs/{path}",
             headers={**HEADERS, "Content-Type": "text/markdown", "If-None-Match": "*"},
-            content=content.encode("utf-8"),
+            content=_render(content, destination).encode("utf-8"),
         )
     if r.status_code == 412:
         return f"Existe deja, rien ecrit: {name}"
@@ -152,6 +178,49 @@ async def append_to_note(name: str, text: str) -> str:
         return "Modifiee entre-temps, rien ecrit. Relis la page et reessaie."
     w.raise_for_status()
     return f"Ajoute a: {name}"
+
+
+@mcp.tool()
+async def replace_note(name: str, content: str, destination: str = "") -> str:
+    """Remplace tout le contenu d'une note existante. Sert a corriger une note
+    qu'on vient d'ecrire; `destination` a le meme sens que dans create_note."""
+    try:
+        path = _writable(name)
+    except ValueError as e:
+        return str(e)
+    async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+        r = await c.get(f"{BASE}/.fs/{path}", headers=HEADERS)
+        if r.status_code == 404:
+            return f"Page introuvable: {name}"
+        r.raise_for_status()
+        etag = r.headers.get("ETag")
+        put_headers = {**HEADERS, "Content-Type": "text/markdown"}
+        if etag:
+            put_headers["If-Match"] = etag
+        w = await c.put(
+            f"{BASE}/.fs/{path}",
+            headers=put_headers,
+            content=_render(content, destination).encode("utf-8"),
+        )
+    if w.status_code == 412:
+        return "Modifiee entre-temps, rien ecrit. Relis la page et reessaie."
+    w.raise_for_status()
+    return f"Remplace: {name}"
+
+
+@mcp.tool()
+async def delete_note(name: str) -> str:
+    """Supprime une note. Irreversible, et limite au prefixe d'ecriture."""
+    try:
+        path = _writable(name)
+    except ValueError as e:
+        return str(e)
+    async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+        r = await c.delete(f"{BASE}/.fs/{path}", headers=HEADERS)
+    if r.status_code == 404:
+        return f"Page introuvable: {name}"
+    r.raise_for_status()
+    return f"Supprime: {name}"
 
 
 if __name__ == "__main__":
