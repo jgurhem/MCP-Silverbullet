@@ -114,7 +114,10 @@ def _writable(name: str) -> str:
 async def create_note(name: str, content: str) -> str:
     """Cree une nouvelle note. Echoue si elle existe deja. Le nom doit commencer
     par le prefixe d'ecriture autorise."""
-    path = _writable(name)
+    try:
+        path = _writable(name)
+    except ValueError as e:
+        return str(e)
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.put(
             f"{BASE}/.fs/{path}",
@@ -130,7 +133,10 @@ async def create_note(name: str, content: str) -> str:
 @mcp.tool()
 async def append_to_note(name: str, text: str) -> str:
     """Ajoute du texte a la fin d'une note existante, sans ecraser le reste."""
-    path = _writable(name)
+    try:
+        path = _writable(name)
+    except ValueError as e:
+        return str(e)
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.get(f"{BASE}/.fs/{path}", headers=HEADERS)
         if r.status_code == 404:
