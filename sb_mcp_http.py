@@ -8,6 +8,8 @@ Variables d'environnement:
   SB_BASE_URL  URL de l'espace, prefixe inclus (ex: https://notes.example.fr/work)
   SB_TOKEN     token d'API du compte (admin UI > Users > API tokens)
   SB_WRITE_PREFIX  prefixe sous lequel l'ecriture est autorisee (defaut: "Inbox/")
+  SB_HIDE_PREFIXES  prefixes exclus des listes et recherches, separes par des
+                    virgules (defaut: "Library/")
   HOST         interface d'ecoute (defaut: 127.0.0.1)
   PORT         port d'ecoute (defaut: 8000)
 """
@@ -20,6 +22,11 @@ from mcp.server.mcpserver import MCPServer
 BASE = os.environ["SB_BASE_URL"].rstrip("/")
 TOKEN = os.environ["SB_TOKEN"]
 WRITE_PREFIX = os.environ.get("SB_WRITE_PREFIX", "Inbox/")
+HIDE_PREFIXES = tuple(
+    p.strip()
+    for p in os.environ.get("SB_HIDE_PREFIXES", "Library/").split(",")
+    if p.strip()
+)
 
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 TIMEOUT = httpx.Timeout(30.0)
@@ -40,12 +47,18 @@ async def _list_md() -> list[dict]:
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.get(f"{BASE}/.fs", headers=HEADERS)
         r.raise_for_status()
-        return [f for f in r.json() if f["name"].endswith(".md")]
+        return [
+            f
+            for f in r.json()
+            if f["name"].endswith(".md")
+            and not f["name"].startswith(HIDE_PREFIXES)
+        ]
 
 
 @mcp.tool()
 async def list_pages() -> str:
-    """Liste toutes les pages de l'espace avec leur date de modification."""
+    """Liste les pages de l'espace, les plus recemment modifiees d'abord.
+    Les pages systeme (Library/ par defaut) sont exclues."""
     files = await _list_md()
     files.sort(key=lambda f: f.get("lastModified", 0), reverse=True)
     return "\n".join(f["name"][:-3] for f in files) or "(espace vide)"

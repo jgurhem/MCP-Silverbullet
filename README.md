@@ -25,6 +25,7 @@ python3 -m venv .venv
 | `SB_BASE_URL`     | yes      | —         | Space URL including its prefix, e.g. `https://notes.example.fr/work` |
 | `SB_TOKEN`        | yes      | —         | API token used for every request                              |
 | `SB_WRITE_PREFIX` | no       | `Inbox/`  | Page prefix under which writing is allowed                    |
+| `SB_HIDE_PREFIXES` | no      | `Library/` | Comma-separated page prefixes hidden from listing and search |
 | `HOST`            | no       | `127.0.0.1` | Interface the HTTP transport binds to                       |
 | `PORT`            | no       | `8000`    | Port the HTTP transport listens on                            |
 
@@ -47,7 +48,7 @@ changing `HOST` — see [Deployment](#deployment).
 
 | Tool             | Description                                                        |
 | ---------------- | ------------------------------------------------------------------ |
-| `list_pages`     | All pages in the space, most recently modified first                |
+| `list_pages`     | Pages in the space, most recently modified first, minus `SB_HIDE_PREFIXES` |
 | `read_page`      | Markdown body of one page, named without the `.md` extension        |
 | `search_pages`   | Case-insensitive search over page names and bodies                  |
 | `create_note`    | Create a page, failing if it already exists                         |
