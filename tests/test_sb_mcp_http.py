@@ -6,6 +6,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from mcp.server.mcpserver.exceptions import ToolError
+
 import sb_mcp_http
 from sb_mcp_http import Config, _page_path, _render, _writable, build_server
 from fake_space import MOUNT, FakeSpace
@@ -450,3 +452,73 @@ async def test_read_page_decodes_utf8_without_charset_header(space):
     assert await call(make_server(), "read_page", name="Inbox/accents") == (
         "réunion avec Benoît — café\n"
     )
+
+
+# --- backend failures stay on the server -----------------------------------
+
+
+@pytest.fixture
+def broken_space(monkeypatch):
+    """Routes every request to a handler of the test's choosing."""
+
+    def install(handler):
+        real_client = httpx.AsyncClient
+
+        def factory(**kwargs):
+            return real_client(transport=httpx.MockTransport(handler), **kwargs)
+
+        monkeypatch.setattr(sb_mcp_http.httpx, "AsyncClient", factory)
+
+    return install
+
+
+def _refused(request):
+    return httpx.Response(401, text=f"bad bearer token {TOKEN}")
+
+
+def _unreachable(request):
+    raise httpx.ConnectError("failed to connect to silverbullet:3000")
+
+
+async def client_text(server, tool, args):
+    """The text a client would end up seeing, whether the tool returned a
+    string or raised: server.py turns a ToolError into the reply body."""
+    try:
+        result = await server.call_tool(tool, args)
+    except ToolError as exc:
+        return str(exc)
+    return result.content[0].text
+
+
+@pytest.mark.parametrize("handler", [_refused, _unreachable])
+@pytest.mark.parametrize(
+    "tool, args",
+    [
+        ("list_pages", {}),
+        ("read_page", {"name": "Journal/2026-09-11"}),
+        ("search_pages", {"query": "anything"}),
+        ("create_note", {"name": "Inbox/note", "content": "x"}),
+        ("append_to_note", {"name": "Inbox/note", "text": "x"}),
+        ("delete_note", {"name": "Inbox/note"}),
+    ],
+)
+async def test_backend_failure_leaks_nothing_to_the_client(
+    broken_space, handler, tool, args
+):
+    # What the SilverBullet leg reveals — the token, the internal URL, the
+    # status — belongs in the server log, not in the client's reply. The
+    # detail survives on the exception's __cause__, which never leaves here.
+    broken_space(handler)
+    message = await client_text(make_server(), tool, args)
+    for secret in (TOKEN, BASE, "space.test", "401", "bearer", "silverbullet"):
+        assert secret.lower() not in message.lower(), f"{secret!r} leaked: {message!r}"
+
+
+@pytest.mark.parametrize("handler", [_refused, _unreachable])
+async def test_backend_failure_detail_is_kept_for_the_log(broken_space, handler):
+    # The generic message is only safe because the cause is still attached:
+    # server.py logs it with logger.exception.
+    broken_space(handler)
+    with pytest.raises(ToolError) as excinfo:
+        await make_server().call_tool("list_pages", {})
+    assert excinfo.value.__cause__ is not None
