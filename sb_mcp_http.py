@@ -152,24 +152,37 @@ server takes care of it."""
         needle = query.lower()
         files = await _list_md()
         hits: list[str] = []
+        unreadable = 0
         sem = asyncio.Semaphore(8)
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
             async def probe(f: dict) -> None:
+                nonlocal unreadable
                 page = f["name"][:-3]
                 if needle in page.lower():
                     hits.append(page)
                     return
                 async with sem:
                     r = await c.get(_fs_url(base, f['name']), headers=headers)
-                if r.status_code == 200 and needle in r.text.lower():
-                    hits.append(page)
+                if r.status_code == 200:
+                    if needle in r.text.lower():
+                        hits.append(page)
+                elif r.status_code != 404:
+                    # A 404 here is benign: the page went away between the
+                    # listing and now, so it cannot match anything.
+                    unreadable += 1
 
-            await asyncio.gather(*(probe(f) for f in files), return_exceptions=True)
+            outcomes = await asyncio.gather(
+                *(probe(f) for f in files), return_exceptions=True
+            )
+        unreadable += sum(1 for o in outcomes if isinstance(o, BaseException))
 
-        if not hits:
-            return f"No result for: {query}"
-        return "\n".join(sorted(hits)[:max_hits])
+        lines = sorted(hits)[:max_hits] if hits else [f"No result for: {query}"]
+        if unreadable:
+            # A count only: what went wrong belongs in the server log. Silence
+            # would hand back an incomplete result as if it were complete.
+            lines.append(f"({unreadable} page(s) could not be read)")
+        return "\n".join(lines)
 
     @mcp.tool()
     async def create_note(name: str, content: str, destination: str = "") -> str:

@@ -522,3 +522,74 @@ async def test_backend_failure_detail_is_kept_for_the_log(broken_space, handler)
     with pytest.raises(ToolError) as excinfo:
         await make_server().call_tool("list_pages", {})
     assert excinfo.value.__cause__ is not None
+
+
+# --- search reports what it could not read ---------------------------------
+
+
+def _breaking(space, name, response):
+    """Makes one page answer `response` (status, body, headers) on GET."""
+    base_route = space._route
+
+    def route(method, path, headers, body):
+        if method == "GET" and path.endswith(name):
+            return response
+        return base_route(method, path, headers, body)
+
+    space._route = route
+
+
+async def test_search_counts_pages_it_could_not_read(space):
+    space.write("Inbox/ok.md", "the needle\n")
+    space.write("Inbox/broken.md", "the needle too\n")
+    _breaking(space, "Inbox/broken.md", (500, b"boom", {}))
+    out = await call(make_server(), "search_pages", query="the needle")
+    assert out.splitlines() == ["Inbox/ok", "(1 page(s) could not be read)"]
+
+
+async def test_search_counts_transport_failures(space):
+    space.write("Inbox/ok.md", "the needle\n")
+    space.write("Inbox/gone.md", "the needle too\n")
+
+    base_route = space._route
+
+    def exploding(method, path, headers, body):
+        if path.endswith("Inbox/gone.md"):
+            raise RuntimeError("connection reset")
+        return base_route(method, path, headers, body)
+
+    space._route = exploding
+    out = await call(make_server(), "search_pages", query="the needle")
+    assert out.splitlines() == ["Inbox/ok", "(1 page(s) could not be read)"]
+
+
+async def test_search_does_not_count_a_page_deleted_meanwhile(space):
+    # 404 between the listing and the fetch is normal, not a failure.
+    space.write("Inbox/ok.md", "the needle\n")
+    space.write("Inbox/vanished.md", "the needle too\n")
+    _breaking(space, "Inbox/vanished.md", (404, b"not found", {}))
+    assert await call(make_server(), "search_pages", query="the needle") == "Inbox/ok"
+
+
+async def test_search_reports_failures_even_with_no_hits(space):
+    space.write("Inbox/broken.md", "the needle\n")
+    _breaking(space, "Inbox/broken.md", (500, b"boom", {}))
+    out = await call(make_server(), "search_pages", query="the needle")
+    assert out.splitlines() == [
+        "No result for: the needle",
+        "(1 page(s) could not be read)",
+    ]
+
+
+async def test_search_stays_silent_when_everything_is_readable(space):
+    out = await call(make_server(), "search_pages", query="a note")
+    assert "could not be read" not in out
+
+
+async def test_search_failure_notice_leaks_nothing(space):
+    space.write("Inbox/broken.md", "the needle\n")
+    _breaking(space, "Inbox/broken.md", (500, b"token " + TOKEN.encode(), {}))
+    out = await call(make_server(), "search_pages", query="the needle")
+    for secret in (TOKEN, BASE, "space.test", "500", "broken"):
+        assert secret.lower() not in out.lower(), f"{secret!r} leaked: {out!r}"
+
