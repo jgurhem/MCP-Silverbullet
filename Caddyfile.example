@@ -1,19 +1,19 @@
-# Exemple de reverse proxy pour sb_mcp_http.py.
-# Caddy gere le TLS et l'authentification; le serveur MCP, lui, ecoute
-# uniquement sur 127.0.0.1 et n'est jamais joignable directement.
+# Example reverse proxy for sb_mcp_http.py.
+# Caddy handles TLS and authentication; the MCP server itself listens only on
+# 127.0.0.1 and is never reachable directly.
 #
-# Generer le hash du mot de passe:  caddy hash-password
-# Syntaxe `basic_auth`: Caddy >= 2.8 (avant: `basicauth`).
+# Generate the password hash:  caddy hash-password
+# `basic_auth` syntax: Caddy >= 2.8 (before that: `basicauth`).
 
 mcp.example.fr {
 	basic_auth {
-		# utilisateur  hash bcrypt (remplacer)
+		# user  bcrypt hash (replace)
 		jerome $2a$14$Zt1kMFqYFxIiBSCd0000000000000000000000000000000000000
 	}
 
 	reverse_proxy 127.0.0.1:8000 {
-		# Les reponses MCP streamable-http sont du SSE: pas de tampon,
-		# sinon le client attend indefiniment.
+		# MCP streamable-http responses are SSE: no buffering,
+		# otherwise the client waits forever.
 		flush_interval -1
 	}
 }

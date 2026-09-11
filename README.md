@@ -65,10 +65,10 @@ replace — so a page that changed underneath the server is not clobbered.
 Writes are confined to `SB_WRITE_PREFIX`, but most notes belong somewhere else —
 a journal page, a project page. `create_note` and `replace_note` take a
 `destination` for that: the note is still written under the prefix, with a
-frontmatter key and a **Classer** button that files it on one click.
+frontmatter key and a **File** button that files it on one click.
 
 ```
-create_note(name="Inbox/point-natixis", content="14h30 point Natixis, RAS",
+create_note(name="Inbox/client-sync", content="2:30pm client sync, nothing to report",
             destination="Journal/2026-09-10")
 ```
 
@@ -80,10 +80,10 @@ destination: Journal/2026-09-10
 ---
 ${inbox.button()}
 
-14h30 point Natixis, RAS
+2:30pm client sync, nothing to report
 ```
 
-Clicking **Classer** appends the body to `Journal/2026-09-10` and deletes the
+Clicking **File** appends the body to `Journal/2026-09-10` and deletes the
 note; the frontmatter and the button line are stripped on the way. The
 destination is re-read after the write, and the source is deleted only once the
 body is confirmed there — a write that did not land never costs the note.
@@ -112,7 +112,7 @@ line in its body is enough:
 ${inbox.pending()}
 ```
 
-Each row carries a note's name, its destination and its own Classer button, so
+Each row carries a note's name, its destination and its own File button, so
 filing several notes does not mean opening each one.
 
 ## Deployment

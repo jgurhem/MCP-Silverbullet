@@ -1,17 +1,17 @@
-"""Serveur MCP exposant un espace SilverBullet distant, en streamable-http.
+"""MCP server exposing a remote SilverBullet space, over streamable-http.
 
-Le serveur n'a pas d'authentification propre: il ecoute sur la loopback et
-doit rester derriere un reverse proxy qui gere le TLS et l'auth (voir
-Caddyfile.example). Ne pas mettre HOST a 0.0.0.0 sans un tel proxy.
+The server has no authentication of its own: it listens on the loopback
+interface and must stay behind a reverse proxy handling TLS and auth (see
+Caddyfile.example). Do not set HOST to 0.0.0.0 without such a proxy.
 
-Variables d'environnement:
-  SB_BASE_URL  URL de l'espace, prefixe inclus (ex: https://notes.example.fr/work)
-  SB_TOKEN     token d'API du compte (admin UI > Users > API tokens)
-  SB_WRITE_PREFIX  prefixe sous lequel l'ecriture est autorisee (defaut: "Inbox/")
-  SB_HIDE_PREFIXES  prefixes exclus des listes et recherches, separes par des
-                    virgules (defaut: "Library/")
-  HOST         interface d'ecoute (defaut: 127.0.0.1)
-  PORT         port d'ecoute (defaut: 8000)
+Environment variables:
+  SB_BASE_URL  space URL, prefix included (e.g. https://notes.example.fr/work)
+  SB_TOKEN     account API token (admin UI > Users > API tokens)
+  SB_WRITE_PREFIX  prefix under which writing is allowed (default: "Inbox/")
+  SB_HIDE_PREFIXES  prefixes excluded from listings and searches, separated by
+                    commas (default: "Library/")
+  HOST         listening interface (default: 127.0.0.1)
+  PORT         listening port (default: 8000)
 """
 
 import os
@@ -31,15 +31,15 @@ HIDE_PREFIXES = tuple(
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 TIMEOUT = httpx.Timeout(30.0)
 
-INSTRUCTIONS = f"""Acces aux notes SilverBullet.
+INSTRUCTIONS = f"""Access to SilverBullet notes.
 
-La lecture porte sur tout l'espace, l'ecriture uniquement sous {WRITE_PREFIX}.
+Reading covers the whole space, writing only under {WRITE_PREFIX}.
 
-Une note destinee a une autre page se cree quand meme avec create_note, en
-renseignant `destination` (ex: "Journal/2026-09-10"): elle est deposee sous
-{WRITE_PREFIX} avec un bouton *Classer* que l'utilisateur clique dans
-SilverBullet pour ajouter le corps a la destination et supprimer la note.
-Ne jamais ecrire ce frontmatter a la main, le serveur s'en charge."""
+A note meant for another page is still created with create_note, by filling in
+`destination` (e.g. "Journal/2026-09-10"): it is dropped under {WRITE_PREFIX}
+with a *File* button the user clicks in SilverBullet to append the body to the
+destination and delete the note. Never write that frontmatter by hand, the
+server takes care of it."""
 
 mcp = MCPServer("silverbullet", instructions=INSTRUCTIONS)
 
@@ -49,7 +49,7 @@ def _page_path(name: str) -> str:
     if name.endswith(".md"):
         name = name[:-3]
     if ".." in name:
-        raise ValueError("nom de page invalide")
+        raise ValueError("invalid page name")
     return f"{name}.md"
 
 
@@ -67,27 +67,27 @@ async def _list_md() -> list[dict]:
 
 @mcp.tool()
 async def list_pages() -> str:
-    """Liste les pages de l'espace, les plus recemment modifiees d'abord.
-    Les pages systeme (Library/ par defaut) sont exclues."""
+    """Lists the pages of the space, most recently modified first.
+    System pages (Library/ by default) are excluded."""
     files = await _list_md()
     files.sort(key=lambda f: f.get("lastModified", 0), reverse=True)
-    return "\n".join(f["name"][:-3] for f in files) or "(espace vide)"
+    return "\n".join(f["name"][:-3] for f in files) or "(empty space)"
 
 
 @mcp.tool()
 async def read_page(name: str) -> str:
-    """Lit le contenu Markdown d'une page. `name` sans l'extension .md."""
+    """Reads the Markdown content of a page. `name` without the .md extension."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.get(f"{BASE}/.fs/{_page_path(name)}", headers=HEADERS)
         if r.status_code == 404:
-            return f"Page introuvable: {name}"
+            return f"Page not found: {name}"
         r.raise_for_status()
         return r.text
 
 
 @mcp.tool()
 async def search_pages(query: str, max_hits: int = 20) -> str:
-    """Recherche insensible a la casse dans le nom et le corps des pages."""
+    """Case-insensitive search in page names and bodies."""
     needle = query.lower()
     files = await _list_md()
     hits: list[str] = []
@@ -107,13 +107,14 @@ async def search_pages(query: str, max_hits: int = 20) -> str:
         await asyncio.gather(*(probe(f) for f in files), return_exceptions=True)
 
     if not hits:
-        return f"Aucun resultat pour: {query}"
+        return f"No result for: {query}"
     return "\n".join(sorted(hits)[:max_hits])
 
 
 def _render(content: str, destination: str) -> str:
-    """Mise en forme d'une note a classer: frontmatter et bouton que la page
-    space-lua `Meta/Inbox` sait traiter. Sans destination, le corps passe tel quel."""
+    """Formatting of a note to be filed: frontmatter and button that the
+    space-lua `Meta/Inbox` page knows how to handle. Without a destination, the
+    body goes through as is."""
     if not destination.strip():
         return content
     return (
@@ -126,20 +127,20 @@ def _writable(name: str) -> str:
     path = _page_path(name)
     if not path.startswith(WRITE_PREFIX):
         raise ValueError(
-            f"ecriture autorisee uniquement sous {WRITE_PREFIX} (recu: {path})"
+            f"writing allowed only under {WRITE_PREFIX} (got: {path})"
         )
     return path
 
 
 @mcp.tool()
 async def create_note(name: str, content: str, destination: str = "") -> str:
-    """Cree une nouvelle note. Echoue si elle existe deja. Le nom doit commencer
-    par le prefixe d'ecriture autorise.
+    """Creates a new note. Fails if it already exists. The name must start with
+    the allowed write prefix.
 
-    `destination` est la page ou la note doit finir par atterrir, si ce n'est pas
-    celle qu'on ecrit. Le serveur pose alors le frontmatter et le bouton
-    *Classer*: l'utilisateur clique, le corps part a la destination et la note
-    est supprimee. `content` reste le corps seul, sans frontmatter."""
+    `destination` is the page where the note should eventually land, if it is not
+    the one being written. The server then adds the frontmatter and the *File*
+    button: the user clicks, the body goes to the destination and the note is
+    deleted. `content` stays the body alone, without frontmatter."""
     try:
         path = _writable(name)
     except ValueError as e:
@@ -151,14 +152,14 @@ async def create_note(name: str, content: str, destination: str = "") -> str:
             content=_render(content, destination).encode("utf-8"),
         )
     if r.status_code == 412:
-        return f"Existe deja, rien ecrit: {name}"
+        return f"Already exists, nothing written: {name}"
     r.raise_for_status()
-    return f"Cree: {name}"
+    return f"Created: {name}"
 
 
 @mcp.tool()
 async def append_to_note(name: str, text: str) -> str:
-    """Ajoute du texte a la fin d'une note existante, sans ecraser le reste."""
+    """Appends text at the end of an existing note, without overwriting the rest."""
     try:
         path = _writable(name)
     except ValueError as e:
@@ -166,7 +167,7 @@ async def append_to_note(name: str, text: str) -> str:
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.get(f"{BASE}/.fs/{path}", headers=HEADERS)
         if r.status_code == 404:
-            return f"Page introuvable: {name}"
+            return f"Page not found: {name}"
         r.raise_for_status()
         etag = r.headers.get("ETag")
         body = r.text.rstrip("\n") + "\n" + text.strip() + "\n"
@@ -175,15 +176,15 @@ async def append_to_note(name: str, text: str) -> str:
             put_headers["If-Match"] = etag
         w = await c.put(f"{BASE}/.fs/{path}", headers=put_headers, content=body.encode("utf-8"))
     if w.status_code == 412:
-        return "Modifiee entre-temps, rien ecrit. Relis la page et reessaie."
+        return "Changed in the meantime, nothing written. Read the page again and retry."
     w.raise_for_status()
-    return f"Ajoute a: {name}"
+    return f"Appended to: {name}"
 
 
 @mcp.tool()
 async def replace_note(name: str, content: str, destination: str = "") -> str:
-    """Remplace tout le contenu d'une note existante. Sert a corriger une note
-    qu'on vient d'ecrire; `destination` a le meme sens que dans create_note."""
+    """Replaces the whole content of an existing note. Useful to correct a note
+    just written; `destination` has the same meaning as in create_note."""
     try:
         path = _writable(name)
     except ValueError as e:
@@ -191,7 +192,7 @@ async def replace_note(name: str, content: str, destination: str = "") -> str:
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.get(f"{BASE}/.fs/{path}", headers=HEADERS)
         if r.status_code == 404:
-            return f"Page introuvable: {name}"
+            return f"Page not found: {name}"
         r.raise_for_status()
         etag = r.headers.get("ETag")
         put_headers = {**HEADERS, "Content-Type": "text/markdown"}
@@ -203,14 +204,14 @@ async def replace_note(name: str, content: str, destination: str = "") -> str:
             content=_render(content, destination).encode("utf-8"),
         )
     if w.status_code == 412:
-        return "Modifiee entre-temps, rien ecrit. Relis la page et reessaie."
+        return "Changed in the meantime, nothing written. Read the page again and retry."
     w.raise_for_status()
-    return f"Remplace: {name}"
+    return f"Replaced: {name}"
 
 
 @mcp.tool()
 async def delete_note(name: str) -> str:
-    """Supprime une note. Irreversible, et limite au prefixe d'ecriture."""
+    """Deletes a note. Irreversible, and limited to the write prefix."""
     try:
         path = _writable(name)
     except ValueError as e:
@@ -218,9 +219,9 @@ async def delete_note(name: str) -> str:
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.delete(f"{BASE}/.fs/{path}", headers=HEADERS)
     if r.status_code == 404:
-        return f"Page introuvable: {name}"
+        return f"Page not found: {name}"
     r.raise_for_status()
-    return f"Supprime: {name}"
+    return f"Deleted: {name}"
 
 
 if __name__ == "__main__":
