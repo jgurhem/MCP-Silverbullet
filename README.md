@@ -105,7 +105,8 @@ It lands at `Library/jgurhem/Inbox`, and `Library: Update` pulls later versions 
 no copying by hand. Reading a public repo needs no GitHub token.
 
 Installing overwrites that page, so the pending-notes list lives in a page of
-your own. Create `Meta/Inbox` with a one-line body:
+your own — your `index`, a `Meta/Inbox`, wherever you will actually see it. One
+line in its body is enough:
 
 ```
 ${inbox.pending()}
