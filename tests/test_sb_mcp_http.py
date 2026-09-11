@@ -1,0 +1,402 @@
+import sys
+from pathlib import Path
+
+import httpx
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import sb_mcp_http
+from sb_mcp_http import Config, _page_path, _render, _writable, build_server
+from fake_space import MOUNT, FakeSpace
+
+BASE = f"http://space.test{MOUNT}"
+TOKEN = "tok"
+
+
+@pytest.fixture
+def space(monkeypatch):
+    """A fake space, with every httpx client in the server routed to it."""
+    sp = FakeSpace(
+        {
+            "Inbox/note.md": "a note\n",
+            "Journal/2026-09-10.md": "the day\n",
+            "Library/std/Core.md": "system stuff\n",
+            "assets/logo.png": "not markdown",
+        }
+    )
+    real_client = httpx.AsyncClient
+
+    def factory(**kwargs):
+        return real_client(transport=httpx.ASGITransport(app=sp.app), **kwargs)
+
+    monkeypatch.setattr(sb_mcp_http.httpx, "AsyncClient", factory)
+    return sp
+
+
+def make_server(**overrides):
+    return build_server(Config(base_url=BASE, token=TOKEN, **overrides))
+
+
+async def call(server, tool, **args):
+    result = await server.call_tool(tool, args)
+    return result.content[0].text
+
+
+# --- configuration ---------------------------------------------------------
+
+
+def write_toml(tmp_path, text):
+    path = tmp_path / "config.toml"
+    path.write_text(text)
+    return str(path)
+
+
+def test_config_from_toml_minimal(tmp_path):
+    path = write_toml(tmp_path, 'base_url = "http://x/work"\ntoken = "t"\n')
+    config = Config.from_toml(path)
+    assert config.base_url == "http://x/work"
+    assert config.token == "t"
+    assert config.write_prefix == "Inbox/"
+    assert config.hide_prefixes == ("Library/",)
+    assert (config.host, config.port) == ("127.0.0.1", 8000)
+
+
+def test_config_from_toml_full(tmp_path):
+    path = write_toml(
+        tmp_path,
+        """
+        base_url = "http://x/work/"
+        token = "t"
+        write_prefix = "Drafts/"
+        hide_prefixes = ["Library/", "Meta/"]
+        host = "0.0.0.0"
+        port = 9001
+        """,
+    )
+    config = Config.from_toml(path)
+    assert config.base_url == "http://x/work"  # trailing slash normalised away
+    assert config.write_prefix == "Drafts/"
+    assert config.hide_prefixes == ("Library/", "Meta/")
+    assert (config.host, config.port) == ("0.0.0.0", 9001)
+
+
+def test_config_rejects_missing_required_key(tmp_path):
+    path = write_toml(tmp_path, 'base_url = "http://x/work"\n')
+    with pytest.raises(ValueError, match="missing key.*token"):
+        Config.from_toml(path)
+
+
+def test_config_rejects_unknown_key(tmp_path):
+    # A typo must not fall back to a default: `hide-prefixes` silently ignored
+    # would expose the pages it was meant to hide.
+    path = write_toml(
+        tmp_path,
+        'base_url = "http://x/work"\ntoken = "t"\nhide-prefixes = ["Library/"]\n',
+    )
+    with pytest.raises(ValueError, match="unknown key"):
+        Config.from_toml(path)
+
+
+# --- page names ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("Inbox/note", "Inbox/note.md"),
+        ("Inbox/note.md", "Inbox/note.md"),
+        ("  Inbox/note  ", "Inbox/note.md"),
+        ("/Inbox/note/", "Inbox/note.md"),
+        ("Journal/2026-09-10", "Journal/2026-09-10.md"),
+    ],
+)
+def test_page_path(name, expected):
+    assert _page_path(name) == expected
+
+
+@pytest.mark.parametrize("name", ["../secrets", "Inbox/../Journal/x", ".."])
+def test_page_path_rejects_traversal(name):
+    with pytest.raises(ValueError):
+        _page_path(name)
+
+
+def test_page_path_rejects_double_dot_anywhere():
+    # Documents current behaviour: the check is a plain substring test, so a
+    # legitimate name containing ".." is refused too.
+    with pytest.raises(ValueError):
+        _page_path("Inbox/really..important")
+
+
+def test_writable_accepts_prefix():
+    assert _writable("Inbox/note", "Inbox/") == "Inbox/note.md"
+
+
+@pytest.mark.parametrize("name", ["Journal/2026-09-10", "Inboxes/note", "Inbox"])
+def test_writable_refuses_outside_prefix(name):
+    with pytest.raises(ValueError, match="writing allowed only under Inbox/"):
+        _writable(name, "Inbox/")
+
+
+def test_writable_follows_configured_prefix():
+    assert _writable("Drafts/x", "Drafts/") == "Drafts/x.md"
+    with pytest.raises(ValueError):
+        _writable("Inbox/x", "Drafts/")
+
+
+# --- note rendering --------------------------------------------------------
+
+
+def test_render_without_destination_passes_content_through():
+    assert _render("  raw body  ", "") == "  raw body  "
+    assert _render("raw body", "   ") == "raw body"
+
+
+def test_render_with_destination_adds_frontmatter_and_button():
+    assert _render("  hello  ", " Journal/2026-09-10 ") == (
+        "---\ndestination: Journal/2026-09-10\n---\n"
+        "${inbox.button()}\n\nhello\n"
+    )
+
+
+# --- list_pages ------------------------------------------------------------
+
+
+async def test_list_pages_orders_by_last_modified_and_hides_prefixes(space):
+    space.write("Inbox/fresh.md", "newest")
+    out = await call(make_server(), "list_pages")
+    assert out.splitlines() == ["Inbox/fresh", "Journal/2026-09-10", "Inbox/note"]
+
+
+async def test_list_pages_honours_configured_hide_prefixes(space):
+    out = await call(make_server(hide_prefixes=("Library/", "Journal/")), "list_pages")
+    assert "Journal/2026-09-10" not in out
+    assert "Inbox/note" in out
+
+
+async def test_list_pages_without_hide_prefixes_hides_nothing(space):
+    out = await call(make_server(hide_prefixes=()), "list_pages")
+    assert "Library/std/Core" in out
+
+
+async def test_list_pages_on_empty_space(space):
+    space.files.clear()
+    assert await call(make_server(), "list_pages") == "(empty space)"
+
+
+async def test_requests_carry_the_token(space):
+    await call(make_server(), "list_pages")
+    assert space.requests[0]["headers"]["authorization"] == f"Bearer {TOKEN}"
+
+
+# --- read_page -------------------------------------------------------------
+
+
+async def test_read_page(space):
+    assert await call(make_server(), "read_page", name="Inbox/note") == "a note\n"
+
+
+async def test_read_page_reads_outside_the_write_prefix(space):
+    assert await call(make_server(), "read_page", name="Library/std/Core") == (
+        "system stuff\n"
+    )
+
+
+async def test_read_page_missing(space):
+    out = await call(make_server(), "read_page", name="Inbox/ghost")
+    assert out == "Page not found: Inbox/ghost"
+
+
+# --- search_pages ----------------------------------------------------------
+
+
+async def test_search_matches_page_name_without_fetching_the_body(space):
+    out = await call(make_server(), "search_pages", query="journal")
+    assert out == "Journal/2026-09-10"
+    assert space.gets(f"{MOUNT}/.fs/Journal/2026-09-10.md") == 0
+
+
+async def test_search_matches_body_case_insensitively(space):
+    space.write("Inbox/other.md", "Contains A NOTE inside\n")
+    out = await call(make_server(), "search_pages", query="a note")
+    assert out.splitlines() == ["Inbox/note", "Inbox/other"]
+
+
+async def test_search_skips_hidden_pages(space):
+    out = await call(make_server(), "search_pages", query="system stuff")
+    assert out == "No result for: system stuff"
+
+
+async def test_search_caps_the_number_of_hits(space):
+    for i in range(5):
+        space.write(f"Inbox/hit-{i}.md", "needle\n")
+    out = await call(make_server(), "search_pages", query="needle", max_hits=3)
+    assert out.splitlines() == ["Inbox/hit-0", "Inbox/hit-1", "Inbox/hit-2"]
+
+
+# --- create_note -----------------------------------------------------------
+
+
+async def test_create_note(space):
+    out = await call(make_server(), "create_note", name="Inbox/new", content="body")
+    assert out == "Created: Inbox/new"
+    assert space.content("Inbox/new.md") == "body"
+
+
+async def test_create_note_with_destination(space):
+    await call(
+        make_server(),
+        "create_note",
+        name="Inbox/new",
+        content="2:30pm client sync",
+        destination="Journal/2026-09-10",
+    )
+    assert space.content("Inbox/new.md") == (
+        "---\ndestination: Journal/2026-09-10\n---\n"
+        "${inbox.button()}\n\n2:30pm client sync\n"
+    )
+
+
+async def test_create_note_refuses_to_overwrite(space):
+    out = await call(make_server(), "create_note", name="Inbox/note", content="new")
+    assert out == "Already exists, nothing written: Inbox/note"
+    assert space.content("Inbox/note.md") == "a note\n"
+
+
+async def test_create_note_outside_prefix_never_reaches_the_space(space):
+    out = await call(
+        make_server(), "create_note", name="Journal/2026-09-10", content="x"
+    )
+    assert out.startswith("writing allowed only under Inbox/")
+    assert space.content("Journal/2026-09-10.md") == "the day\n"
+    assert space.requests == []
+
+
+# --- append_to_note --------------------------------------------------------
+
+
+async def test_append_to_note(space):
+    out = await call(make_server(), "append_to_note", name="Inbox/note", text="  more  ")
+    assert out == "Appended to: Inbox/note"
+    assert space.content("Inbox/note.md") == "a note\nmore\n"
+
+
+async def test_append_sends_the_etag_it_read(space):
+    etag = space.files["Inbox/note.md"]["etag"]
+    await call(make_server(), "append_to_note", name="Inbox/note", text="more")
+    put = [r for r in space.requests if r["method"] == "PUT"][-1]
+    assert put["headers"]["if-match"] == etag
+
+
+async def test_append_refuses_a_concurrent_change(space):
+    # Someone else writes between our GET and our PUT: the ETag we read is
+    # stale, and the write must be refused rather than clobber their change.
+    space.on_get = lambda name: space.write(name, "changed elsewhere\n")
+    out = await call(make_server(), "append_to_note", name="Inbox/note", text="more")
+    assert out.startswith("Changed in the meantime")
+    assert space.content("Inbox/note.md") == "changed elsewhere\n"
+
+
+async def test_replace_refuses_a_concurrent_change(space):
+    space.on_get = lambda name: space.write(name, "changed elsewhere\n")
+    out = await call(make_server(), "replace_note", name="Inbox/note", content="mine")
+    assert out.startswith("Changed in the meantime")
+    assert space.content("Inbox/note.md") == "changed elsewhere\n"
+
+
+async def test_append_to_missing_note(space):
+    out = await call(make_server(), "append_to_note", name="Inbox/ghost", text="x")
+    assert out == "Page not found: Inbox/ghost"
+
+
+async def test_append_outside_prefix(space):
+    out = await call(
+        make_server(), "append_to_note", name="Journal/2026-09-10", text="x"
+    )
+    assert out.startswith("writing allowed only under Inbox/")
+    assert space.requests == []
+
+
+# --- replace_note ----------------------------------------------------------
+
+
+async def test_replace_note(space):
+    out = await call(
+        make_server(), "replace_note", name="Inbox/note", content="rewritten\n"
+    )
+    assert out == "Replaced: Inbox/note"
+    assert space.content("Inbox/note.md") == "rewritten\n"
+
+
+async def test_replace_note_with_destination(space):
+    await call(
+        make_server(),
+        "replace_note",
+        name="Inbox/note",
+        content="fixed",
+        destination="Journal/2026-09-10",
+    )
+    assert space.content("Inbox/note.md").startswith(
+        "---\ndestination: Journal/2026-09-10\n---\n"
+    )
+
+
+async def test_replace_missing_note(space):
+    out = await call(make_server(), "replace_note", name="Inbox/ghost", content="x")
+    assert out == "Page not found: Inbox/ghost"
+
+
+async def test_replace_outside_prefix(space):
+    out = await call(
+        make_server(), "replace_note", name="Journal/2026-09-10", content="x"
+    )
+    assert out.startswith("writing allowed only under Inbox/")
+    assert space.requests == []
+
+
+# --- delete_note -----------------------------------------------------------
+
+
+async def test_delete_note(space):
+    out = await call(make_server(), "delete_note", name="Inbox/note")
+    assert out == "Deleted: Inbox/note"
+    assert "Inbox/note.md" not in space.files
+
+
+async def test_delete_missing_note(space):
+    out = await call(make_server(), "delete_note", name="Inbox/ghost")
+    assert out == "Page not found: Inbox/ghost"
+
+
+async def test_delete_outside_prefix(space):
+    out = await call(make_server(), "delete_note", name="Journal/2026-09-10")
+    assert out.startswith("writing allowed only under Inbox/")
+    assert "Journal/2026-09-10.md" in space.files
+    assert space.requests == []
+
+
+# --- MCP surface -----------------------------------------------------------
+
+
+async def test_all_tools_are_exposed():
+    tools = await make_server().list_tools()
+    assert {t.name for t in tools} == {
+        "list_pages",
+        "read_page",
+        "search_pages",
+        "create_note",
+        "append_to_note",
+        "replace_note",
+        "delete_note",
+    }
+
+
+async def test_create_note_schema_makes_destination_optional():
+    tools = {t.name: t for t in await make_server().list_tools()}
+    schema = tools["create_note"].input_schema
+    assert set(schema["required"]) == {"name", "content"}
+    assert schema["properties"]["destination"]["default"] == ""
+
+
+def test_instructions_mention_the_configured_write_prefix():
+    assert "Drafts/" in make_server(write_prefix="Drafts/").instructions

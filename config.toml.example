@@ -1,0 +1,19 @@
+# Copy to config.toml and fill in. The file holds an API token: keep it out of
+# version control (config.toml is gitignored).
+
+# Space URL, prefix included.
+base_url = "https://notes.example.fr/work"
+
+# Account API token: admin UI > Users > API tokens.
+token = "..."
+
+# Page prefix under which writing is allowed.
+#write_prefix = "Inbox/"
+
+# Page prefixes hidden from listing and search.
+#hide_prefixes = ["Library/"]
+
+# What the streamable-http transport binds to. Leave host on the loopback
+# interface unless a reverse proxy handles TLS and auth in front of it.
+#host = "127.0.0.1"
+#port = 8000

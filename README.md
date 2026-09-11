@@ -8,7 +8,7 @@ page prefix.
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+ (`tomllib`)
 - A SilverBullet instance and an API token (admin UI > Users > API tokens)
 
 ## Install
@@ -20,21 +20,29 @@ python3 -m venv .venv
 
 ## Configuration
 
-| Variable          | Required | Default   | Description                                                  |
-| ----------------- | -------- | --------- | ------------------------------------------------------------ |
-| `SB_BASE_URL`     | yes      | —         | Space URL including its prefix, e.g. `https://notes.example.fr/work` |
-| `SB_TOKEN`        | yes      | —         | API token used for every request                              |
-| `SB_WRITE_PREFIX` | no       | `Inbox/`  | Page prefix under which writing is allowed                    |
-| `SB_HIDE_PREFIXES` | no      | `Library/` | Comma-separated page prefixes hidden from listing and search |
-| `HOST`            | no       | `127.0.0.1` | Interface the HTTP transport binds to                       |
-| `PORT`            | no       | `8000`    | Port the HTTP transport listens on                            |
+Settings live in a TOML file, `config.toml` by default:
+
+```sh
+cp config.toml.example config.toml
+```
+
+| Key              | Required | Default      | Description                                                  |
+| ---------------- | -------- | ------------ | ------------------------------------------------------------ |
+| `base_url`       | yes      | —            | Space URL including its prefix, e.g. `https://notes.example.fr/work` |
+| `token`          | yes      | —            | API token used for every request                              |
+| `write_prefix`   | no       | `Inbox/`     | Page prefix under which writing is allowed                    |
+| `hide_prefixes`  | no       | `["Library/"]` | Page prefixes hidden from listing and search                |
+| `host`           | no       | `127.0.0.1`  | Interface the HTTP transport binds to                         |
+| `port`           | no       | `8000`       | Port the HTTP transport listens on                            |
+
+The file holds a token, so it is gitignored. An unknown key is an error rather
+than a silent fallback to the default.
 
 ## Run
 
 ```sh
-export SB_BASE_URL=https://notes.example.fr/work
-export SB_TOKEN=...
-.venv/bin/python sb_mcp_http.py
+.venv/bin/python sb_mcp_http.py            # reads ./config.toml
+.venv/bin/python sb_mcp_http.py other.toml # or a path of your own
 ```
 
 The server speaks MCP over the `streamable-http` transport, on `/mcp`. It binds
@@ -42,13 +50,13 @@ to `127.0.0.1` by default, so a client on the same machine reaches it at
 `http://127.0.0.1:8000/mcp`.
 
 To reach it from anywhere else, put a reverse proxy in front of it rather than
-changing `HOST` — see [Deployment](#deployment).
+changing `host` — see [Deployment](#deployment).
 
 ## Tools
 
 | Tool             | Description                                                        |
 | ---------------- | ------------------------------------------------------------------ |
-| `list_pages`     | Pages in the space, most recently modified first, minus `SB_HIDE_PREFIXES` |
+| `list_pages`     | Pages in the space, most recently modified first, minus `hide_prefixes` |
 | `read_page`      | Markdown body of one page, named without the `.md` extension        |
 | `search_pages`   | Case-insensitive search over page names and bodies                  |
 | `create_note`    | Create a page, failing if it already exists                         |
@@ -56,13 +64,13 @@ changing `HOST` — see [Deployment](#deployment).
 | `replace_note`   | Replace a page's whole content, to correct a note already written   |
 | `delete_note`    | Delete a page                                                       |
 
-Every write tool rejects any page outside `SB_WRITE_PREFIX`, and they use HTTP
+Every write tool rejects any page outside `write_prefix`, and they use HTTP
 conditional requests — `If-None-Match` on create, `If-Match` on append and
 replace — so a page that changed underneath the server is not clobbered.
 
 ## Filing notes outside the write prefix
 
-Writes are confined to `SB_WRITE_PREFIX`, but most notes belong somewhere else —
+Writes are confined to `write_prefix`, but most notes belong somewhere else —
 a journal page, a project page. `create_note` and `replace_note` take a
 `destination` for that: the note is still written under the prefix, with a
 frontmatter key and a **File** button that files it on one click.
@@ -119,7 +127,7 @@ filing several notes does not mean opening each one.
 
 **The server has no authentication of its own.** Any request that reaches it
 gets read access to the entire space, plus write access under
-`SB_WRITE_PREFIX`, using the configured token. That is why it binds to the
+`write_prefix`, using the configured token. That is why it binds to the
 loopback interface: authentication and TLS belong to a reverse proxy in front
 of it.
 
@@ -128,7 +136,7 @@ non-obvious setting is `flush_interval -1`: MCP streams its responses as
 server-sent events, and a proxy that buffers them leaves the client waiting
 forever.
 
-Setting `HOST=0.0.0.0` publishes an unauthenticated server on every interface.
+Setting `host = "0.0.0.0"` publishes an unauthenticated server on every interface.
 Only do it where something else restricts access — a container published as
 `-p 127.0.0.1:8000:8000`, or a private network you control.
 
@@ -136,6 +144,18 @@ Note that MCP's own HTTP auth is OAuth bearer-based, so a given client may not
 support HTTP Basic. If yours does not, either use a proxy that accepts a bearer
 token, or move authentication into the server itself: the SDK takes a
 `token_verifier` on `MCPServer(...)` for exactly this.
+
+## Tests
+
+```sh
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest
+```
+
+The suite needs no network and no SilverBullet: `tests/fake_space.py` is an
+ASGI stand-in for the `/.fs` API that keeps real `ETag` state, so the
+conditional requests the write tools depend on are exercised against stored
+state rather than against canned responses.
 
 ## Known limitations
 

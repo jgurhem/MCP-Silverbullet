@@ -1,3 +1,4 @@
+# Python 3.11+ required: tomllib, used to read config.toml, landed there.
 # mcp 2.x required: FastMCP was renamed MCPServer there (import in sb_mcp_http.py).
 # With mcp<2 the import fails.
 mcp>=2.2,<3
