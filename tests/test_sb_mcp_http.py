@@ -400,3 +400,53 @@ async def test_create_note_schema_makes_destination_optional():
 
 def test_instructions_mention_the_configured_write_prefix():
     assert "Drafts/" in make_server(write_prefix="Drafts/").instructions
+
+
+# --- page names needing URL quoting ----------------------------------------
+
+SPECIAL_NAMES = ["Projets/Q&A #1", "Notes/what?", "Journal/100% done", "Inbox/été"]
+
+
+@pytest.mark.parametrize("name", SPECIAL_NAMES)
+async def test_read_page_quotes_special_characters(space, name):
+    # A `#` or `?` left raw in the URL cuts the path short, and the request
+    # lands on another page — or on none.
+    space.write(f"{name}.md", "the body\n")
+    assert await call(make_server(), "read_page", name=name) == "the body\n"
+
+
+@pytest.mark.parametrize("name", ["Inbox/Q&A #1", "Inbox/what?", "Inbox/100% done"])
+async def test_write_tools_quote_special_characters(space, name):
+    server = make_server()
+    assert await call(server, "create_note", name=name, content="first") == (
+        f"Created: {name}"
+    )
+    assert space.content(f"{name}.md") == "first"
+
+    assert await call(server, "append_to_note", name=name, text="second") == (
+        f"Appended to: {name}"
+    )
+    assert space.content(f"{name}.md") == "first\nsecond\n"
+
+    assert await call(server, "replace_note", name=name, content="third") == (
+        f"Replaced: {name}"
+    )
+    assert space.content(f"{name}.md") == "third"
+
+    assert await call(server, "delete_note", name=name) == f"Deleted: {name}"
+    assert f"{name}.md" not in space.files
+
+
+async def test_search_reaches_bodies_of_special_names(space):
+    space.write("Projets/Q&A #1.md", "the needle is here\n")
+    out = await call(make_server(), "search_pages", query="the needle")
+    assert out == "Projets/Q&A #1"
+
+
+async def test_read_page_decodes_utf8_without_charset_header(space):
+    # The fake space serves `text/markdown` with no charset, as SilverBullet
+    # does: guard against a silent mojibake regression.
+    space.write("Inbox/accents.md", "réunion avec Benoît — café\n")
+    assert await call(make_server(), "read_page", name="Inbox/accents") == (
+        "réunion avec Benoît — café\n"
+    )

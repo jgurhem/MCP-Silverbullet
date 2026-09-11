@@ -16,6 +16,7 @@ import sys
 import asyncio
 import tomllib
 from dataclasses import dataclass, fields
+from urllib.parse import quote
 
 import httpx
 from mcp.server.mcpserver import MCPServer
@@ -79,6 +80,12 @@ def _writable(name: str, write_prefix: str) -> str:
     return path
 
 
+def _fs_url(base: str, path: str) -> str:
+    """URL of a page in the /.fs API. The page name is percent-encoded: a `#`
+    or a `?` left raw would cut the path short and address another page."""
+    return f"{base}/.fs/{quote(path)}"
+
+
 def _render(content: str, destination: str) -> str:
     """Formatting of a note to be filed: frontmatter and button that the
     space-lua `Meta/Inbox` page knows how to handle. Without a destination, the
@@ -133,7 +140,7 @@ server takes care of it."""
     async def read_page(name: str) -> str:
         """Reads the Markdown content of a page. `name` without the .md extension."""
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
-            r = await c.get(f"{base}/.fs/{_page_path(name)}", headers=headers)
+            r = await c.get(_fs_url(base, _page_path(name)), headers=headers)
             if r.status_code == 404:
                 return f"Page not found: {name}"
             r.raise_for_status()
@@ -154,7 +161,7 @@ server takes care of it."""
                     hits.append(page)
                     return
                 async with sem:
-                    r = await c.get(f"{base}/.fs/{f['name']}", headers=headers)
+                    r = await c.get(_fs_url(base, f['name']), headers=headers)
                 if r.status_code == 200 and needle in r.text.lower():
                     hits.append(page)
 
@@ -179,7 +186,7 @@ server takes care of it."""
             return str(e)
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
             r = await c.put(
-                f"{base}/.fs/{path}",
+                _fs_url(base, path),
                 headers={
                     **headers,
                     "Content-Type": "text/markdown",
@@ -200,7 +207,7 @@ server takes care of it."""
         except ValueError as e:
             return str(e)
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
-            r = await c.get(f"{base}/.fs/{path}", headers=headers)
+            r = await c.get(_fs_url(base, path), headers=headers)
             if r.status_code == 404:
                 return f"Page not found: {name}"
             r.raise_for_status()
@@ -210,7 +217,7 @@ server takes care of it."""
             if etag:
                 put_headers["If-Match"] = etag
             w = await c.put(
-                f"{base}/.fs/{path}",
+                _fs_url(base, path),
                 headers=put_headers,
                 content=body.encode("utf-8"),
             )
@@ -228,7 +235,7 @@ server takes care of it."""
         except ValueError as e:
             return str(e)
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
-            r = await c.get(f"{base}/.fs/{path}", headers=headers)
+            r = await c.get(_fs_url(base, path), headers=headers)
             if r.status_code == 404:
                 return f"Page not found: {name}"
             r.raise_for_status()
@@ -237,7 +244,7 @@ server takes care of it."""
             if etag:
                 put_headers["If-Match"] = etag
             w = await c.put(
-                f"{base}/.fs/{path}",
+                _fs_url(base, path),
                 headers=put_headers,
                 content=_render(content, destination).encode("utf-8"),
             )
@@ -254,7 +261,7 @@ server takes care of it."""
         except ValueError as e:
             return str(e)
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
-            r = await c.delete(f"{base}/.fs/{path}", headers=headers)
+            r = await c.delete(_fs_url(base, path), headers=headers)
         if r.status_code == 404:
             return f"Page not found: {name}"
         r.raise_for_status()
