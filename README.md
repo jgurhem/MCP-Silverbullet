@@ -65,8 +65,9 @@ changing `host` — see [Deployment](#deployment).
 | `delete_note`    | Delete a page                                                       |
 
 Every write tool rejects any page outside `write_prefix`, and they use HTTP
-conditional requests — `If-None-Match` on create, `If-Match` on append and
-replace — so a page that changed underneath the server is not clobbered.
+conditional requests — `If-None-Match` on create, `If-Match` on append,
+replace and delete — so a page that changed underneath the server is neither
+clobbered nor erased. A space that sends no `ETag` gets no write at all.
 
 ## Filing notes outside the write prefix
 

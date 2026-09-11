@@ -23,6 +23,14 @@ from mcp.server.mcpserver import MCPServer
 
 TIMEOUT = httpx.Timeout(30.0)
 
+# SilverBullet sends an ETag on every GET and PUT (see its HTTP API, section
+# "Conditional writes"). Its absence means we are not talking to what we think
+# we are, and acting anyway would drop the guarantee the whole flow rests on.
+NO_ETAG = (
+    "The space sent no ETag, so the page cannot be changed safely. "
+    "Nothing was changed."
+)
+
 
 @dataclass
 class Config:
@@ -225,10 +233,14 @@ server takes care of it."""
                 return f"Page not found: {name}"
             r.raise_for_status()
             etag = r.headers.get("ETag")
+            if not etag:
+                return NO_ETAG
             body = r.text.rstrip("\n") + "\n" + text.strip() + "\n"
-            put_headers = {**headers, "Content-Type": "text/markdown"}
-            if etag:
-                put_headers["If-Match"] = etag
+            put_headers = {
+                **headers,
+                "Content-Type": "text/markdown",
+                "If-Match": etag,
+            }
             w = await c.put(
                 _fs_url(base, path),
                 headers=put_headers,
@@ -253,9 +265,13 @@ server takes care of it."""
                 return f"Page not found: {name}"
             r.raise_for_status()
             etag = r.headers.get("ETag")
-            put_headers = {**headers, "Content-Type": "text/markdown"}
-            if etag:
-                put_headers["If-Match"] = etag
+            if not etag:
+                return NO_ETAG
+            put_headers = {
+                **headers,
+                "Content-Type": "text/markdown",
+                "If-Match": etag,
+            }
             w = await c.put(
                 _fs_url(base, path),
                 headers=put_headers,
@@ -274,10 +290,23 @@ server takes care of it."""
         except ValueError as e:
             return str(e)
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
-            r = await c.delete(_fs_url(base, path), headers=headers)
-        if r.status_code == 404:
+            # Read first: deleting is irreversible, so it goes out conditional
+            # like the other writes rather than erasing a change we never saw.
+            r = await c.get(_fs_url(base, path), headers=headers)
+            if r.status_code == 404:
+                return f"Page not found: {name}"
+            r.raise_for_status()
+            etag = r.headers.get("ETag")
+            if not etag:
+                return NO_ETAG
+            d = await c.delete(
+                _fs_url(base, path), headers={**headers, "If-Match": etag}
+            )
+        if d.status_code == 412:
+            return "Changed in the meantime, nothing deleted. Read the page again and retry."
+        if d.status_code == 404:
             return f"Page not found: {name}"
-        r.raise_for_status()
+        d.raise_for_status()
         return f"Deleted: {name}"
 
     return mcp

@@ -113,6 +113,9 @@ class FakeSpace:
         if method == "DELETE":
             if entry is None:
                 return 404, b"not found", {}
+            if_match = headers.get("if-match")
+            if if_match is not None and entry["etag"] != if_match:
+                return 412, b"stale", {}
             del self.files[name]
             return 200, b"ok", {}
 

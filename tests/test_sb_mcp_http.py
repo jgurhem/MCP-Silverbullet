@@ -593,3 +593,48 @@ async def test_search_failure_notice_leaks_nothing(space):
     for secret in (TOKEN, BASE, "space.test", "500", "broken"):
         assert secret.lower() not in out.lower(), f"{secret!r} leaked: {out!r}"
 
+
+# --- writes require an ETag ------------------------------------------------
+
+
+def _strip_etags(space):
+    base_route = space._route
+
+    def route(method, path, headers, body):
+        status, out, extra = base_route(method, path, headers, body)
+        extra.pop("etag", None)
+        return status, out, extra
+
+    space._route = route
+
+
+@pytest.mark.parametrize(
+    "tool, args",
+    [
+        ("append_to_note", {"name": "Inbox/note", "text": "more"}),
+        ("replace_note", {"name": "Inbox/note", "content": "other"}),
+        ("delete_note", {"name": "Inbox/note"}),
+    ],
+)
+async def test_writes_refuse_when_the_space_sends_no_etag(space, tool, args):
+    # SilverBullet always sends one; its absence means the guarantee is gone,
+    # so the page is left alone rather than written blindly.
+    _strip_etags(space)
+    out = await call(make_server(), tool, **args)
+    assert out == sb_mcp_http.NO_ETAG
+    assert space.content("Inbox/note.md") == "a note\n"
+
+
+async def test_delete_sends_the_etag_it_read(space):
+    etag = space.files["Inbox/note.md"]["etag"]
+    await call(make_server(), "delete_note", name="Inbox/note")
+    sent = [r for r in space.requests if r["method"] == "DELETE"][-1]
+    assert sent["headers"]["if-match"] == etag
+
+
+async def test_delete_refuses_a_concurrent_change(space):
+    # Deleting is irreversible: a page changed since we read it must survive.
+    space.on_get = lambda name: space.write(name, "changed elsewhere\n")
+    out = await call(make_server(), "delete_note", name="Inbox/note")
+    assert out.startswith("Changed in the meantime")
+    assert space.content("Inbox/note.md") == "changed elsewhere\n"
