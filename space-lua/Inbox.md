@@ -1,8 +1,10 @@
 ---
-description: Classe une note d'Inbox vers la destination indiquee en frontmatter.
+name: Library/jgurhem/Inbox
+tags: meta/library
+description: Classe une note d'Inbox vers la page indiquee par son frontmatter.
 ---
 
-Le serveur MCP ne peut ecrire que sous `Inbox/`. Une note destinee ailleurs y est deposee avec une cle `destination:` en frontmatter et un `${inbox.button()}` dans son corps, ce qui affiche un bouton **Classer** : le corps est ajoute a la fin de la page destination, puis la note d'`Inbox/` est supprimee.
+Le serveur MCP [mcp-silverbullet](https://github.com/jgurhem/MCP-Silverbullet) ne peut ecrire que sous un prefixe unique, `Inbox/`. Une note destinee ailleurs y est deposee avec une cle `destination:` en frontmatter et un `${inbox.button()}` dans son corps, ce qui affiche un bouton **Classer** : le corps est ajoute a la fin de la page destination, puis la note d'`Inbox/` est supprimee.
 
 C'est l'outil `create_note` du serveur qui pose ce frontmatter et ce bouton, a partir de son parametre `destination`. Rien a ecrire a la main.
 
@@ -21,8 +23,17 @@ La ligne du bouton est retiree du texte au moment du classement : elle ne part p
 
 La commande `Inbox: Classer vers destination` fait le meme travail depuis la palette (Ctrl-/), utile si le bouton n'a pas ete mis dans la note.
 
-# En attente
+# Tableau de bord
+Cette page est ecrasee a chaque mise a jour de la bibliotheque, donc la liste des
+notes en attente vit ailleurs. Creer une page — `Meta/Inbox` par exemple — dont
+le corps tient en un appel :
+
+~~~
 ${inbox.pending()}
+~~~
+
+Chaque ligne y porte le nom de la note, sa destination et son propre bouton
+**Classer** ; on enchaine les classements sans quitter la liste.
 
 # Implementation
 ```space-lua

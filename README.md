@@ -94,10 +94,25 @@ and the content is written verbatim, for a note that genuinely lives under the
 prefix.
 
 The button and the command are not part of this server — they live in the
-SilverBullet space, as the space-lua page [`space-lua/Meta-Inbox.md`](space-lua/Meta-Inbox.md).
-Copy it to `Meta/Inbox` in your space. That page also lists every note still
-waiting, with a Classer button per row, so filing several notes does not mean
-opening each one.
+SilverBullet space, as [`space-lua/Inbox.md`](space-lua/Inbox.md), a SilverBullet
+library. Install it with the `Library: Install` command and this URI:
+
+```
+https://github.com/jgurhem/MCP-Silverbullet/blob/main/space-lua/Inbox.md
+```
+
+It lands at `Library/jgurhem/Inbox`, and `Library: Update` pulls later versions —
+no copying by hand. Reading a public repo needs no GitHub token.
+
+Installing overwrites that page, so the pending-notes list lives in a page of
+your own. Create `Meta/Inbox` with a one-line body:
+
+```
+${inbox.pending()}
+```
+
+Each row carries a note's name, its destination and its own Classer button, so
+filing several notes does not mean opening each one.
 
 ## Deployment
 
@@ -125,10 +140,6 @@ token, or move authentication into the server itself: the SDK takes a
 
 `search_pages` fetches every page in the space on each call, so search cost
 grows linearly with space size.
-
-`space-lua/Meta-Inbox.md` is a reference copy of a page that lives in the
-SilverBullet space; the space holds the version that actually runs. Since
-`Meta/` is outside the write prefix, the two are resynchronised by hand.
 
 ## License
 
